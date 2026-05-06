@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+
+# Logs (ログファイル自体はリポジトリに含めない)
+worklogs/
+
+# Environment
+.env
