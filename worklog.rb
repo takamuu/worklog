@@ -5,9 +5,6 @@
 # worklog - Daily Work Log CLI
 # ============================================================
 
-require "json"
-require "net/http"
-require "uri"
 require "fileutils"
 require "date"
 
@@ -15,11 +12,10 @@ module Worklog
   WEEKDAYS_JA = %w[日 月 火 水 木 金 土].freeze
 
   class Config
-    attr_reader :log_dir, :webhook_url, :block_interval, :start_hour, :editor
+    attr_reader :log_dir, :block_interval, :start_hour, :editor
 
     def initialize
-      @log_dir        = ENV.fetch("WORKLOG_DIR", File.join(Dir.home, "worklogs"))
-      @webhook_url    = ENV["DISCORD_WEBHOOK_URL"]
+      @log_dir        = ENV.fetch("WORKLOG_DIR", File.join(Dir.home, "environment", "worklog"))
       @block_interval = ENV.fetch("WORKLOG_BLOCK_INTERVAL", "2").to_i
       @start_hour     = ENV.fetch("WORKLOG_START_HOUR", "10").to_i
       @editor         = ENV.fetch("EDITOR", "vim")
@@ -49,7 +45,7 @@ module Worklog
 
     def header
       dow = WEEKDAYS_JA[@date.wday]
-      "#{@date.strftime('%Y/%m/%d')}(#{dow})"
+      "### #{@date.strftime('%Y/%m/%d')}(#{dow})"
     end
 
     # --- 現在の時間ブロック ---
@@ -67,7 +63,7 @@ module Worklog
       FileUtils.mkdir_p(File.dirname(@path))
       return if exists?
 
-      write("#{header}\nタイムライン\n")
+      write("#{header}\n")
       warn "📄 新しいログファイルを作成しました: #{@path}"
     end
 
@@ -306,8 +302,6 @@ module Worklog
     # --- post ---
 
     def cmd_post(args)
-      dry_run = args.include?("--dry-run")
-
       unless log_file.exists?
         warn "❌ 今日のログがありません。"
         exit 1
@@ -316,69 +310,11 @@ module Worklog
       content = log_file.read
       chars = content.length
 
-      if dry_run
-        warn "🔍 投稿プレビュー (#{chars} 文字):"
-        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        puts content
-        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        warn "ℹ️  --dry-run モードです。実際の送信はされていません。"
-        return
-      end
+      IO.popen("pbcopy", "w") { |f| f.write(content) }
 
-      if @config.webhook_url.nil? || @config.webhook_url.empty?
-        warn "❌ DISCORD_WEBHOOK_URL が設定されていません。"
-        warn '   export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."'
-        exit 1
-      end
-
-      if chars <= 2000
-        send_to_discord(content)
-      else
-        warn "⚠️  内容が #{chars} 文字あります（Discord上限: 2000文字）"
-        warn "   分割して送信します。"
-        split_and_send(content)
-      end
-
-      warn "✅ Discordに投稿しました！"
-    end
-
-    # --- Discord送信 ---
-
-    def send_to_discord(message)
-      uri = URI.parse(@config.webhook_url)
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.use_ssl = true
-
-      request = Net::HTTP::Post.new(uri.path)
-      request["Content-Type"] = "application/json"
-      request.body = JSON.generate({ content: message })
-
-      response = http.request(request)
-
-      unless %w[200 204].include?(response.code)
-        warn "❌ Discord送信エラー (HTTP #{response.code})"
-        exit 1
-      end
-    end
-
-    def split_and_send(content)
-      chunks = []
-      current_chunk = ""
-
-      content.each_line do |line|
-        if current_chunk.length + line.length > 1900
-          chunks << current_chunk
-          current_chunk = ""
-        end
-        current_chunk += line
-      end
-      chunks << current_chunk unless current_chunk.empty?
-
-      chunks.each_with_index do |chunk, i|
-        warn "📤 Part #{i + 1} を送信中..."
-        send_to_discord(chunk)
-        sleep 1 if i < chunks.size - 1 # レート制限対策
-      end
+      warn "✅ クリップボードにコピーしました（#{chars} 文字）"
+      warn "   Discordに貼り付けてください。" if chars <= 2000
+      warn "⚠️  #{chars} 文字あります（Discord上限: 2000文字）。分割して貼り付けてください。" if chars > 2000
     end
 
     # --- remind ---
@@ -391,15 +327,11 @@ module Worklog
 
       if RUBY_PLATFORM.include?("darwin")
         warn '  # macOS: 通知センター経由'
-        warn "  0 10,12,14,16,18 * * 1-5 osascript -e 'display notification \"作業ログを記録しましょう！\" with title \"worklog\"'"
+        warn "  30 9,11,13,15,17,19,21 * * 1-5 osascript -e 'display notification \"あと30分で記録の時間です\" with title \"worklog\"'"
       else
         warn '  # Linux: notify-send 経由'
-        warn '  0 10,12,14,16,18 * * 1-5 DISPLAY=:0 notify-send "worklog" "作業ログを記録しましょう！"'
+        warn '  30 9,11,13,15,17,19,21 * * 1-5 DISPLAY=:0 notify-send "worklog" "あと30分で記録の時間です"'
       end
-
-      warn ""
-      warn "  # 終業時に自動投稿したい場合（例: 19:00）:"
-      warn "  0 19 * * 1-5 /usr/local/bin/worklog post"
       warn ""
       warn "crontab -e で編集できます。"
     end
@@ -418,8 +350,7 @@ module Worklog
           worklog todo "やること"         明日のやることに追加
           worklog review                  今日のログをプレビュー
           worklog edit                    エディタで直接編集
-          worklog post                    Discordに投稿
-          worklog post --dry-run          投稿プレビュー（送信しない）
+          worklog post                    内容をクリップボードにコピー
           worklog remind                  リマインド設定のヘルプ
           worklog help                    このヘルプを表示
 
