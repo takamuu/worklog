@@ -84,7 +84,7 @@ module Worklog
       if retro_idx
         current.insert(retro_idx, block, "")
       else
-        current << "" << block
+        current << block
       end
 
       write(current.join("\n") + "\n")
@@ -165,6 +165,10 @@ module Worklog
         end
       end
 
+      if insert_idx < current.size
+        insert_idx -= 1 while insert_idx > section_idx + 1 && current[insert_idx - 1] == ""
+      end
+
       current.insert(insert_idx, content)
       write(current.join("\n") + "\n")
     end
@@ -200,8 +204,9 @@ module Worklog
       when "retro"   then cmd_retro(args)
       when "todo"    then cmd_todo(args)
       when "review"  then cmd_review
+      when "delete"  then cmd_delete
       when "edit"    then cmd_edit
-      when "post"    then cmd_post(args)
+      when "copy"    then cmd_post(args)
       when "remind"  then cmd_remind
       when "help", "-h", "--help" then cmd_help
       else
@@ -278,6 +283,48 @@ module Worklog
       warn "📋 明日のやること追加: #{content}"
     end
 
+    # --- delete ---
+
+    def cmd_delete
+      unless log_file.exists?
+        warn "❌ 今日のログがありません。"
+        exit 1
+      end
+
+      current = log_file.lines
+      bullet_lines = current.each_with_index.select { |line, _| line.match?(/^\s*\* /) }
+
+      if bullet_lines.empty?
+        warn "❌ 削除できる項目がありません。"
+        exit 1
+      end
+
+      warn "削除する項目の番号を入力してください:"
+      bullet_lines.each_with_index do |(line, _), idx|
+        warn "  #{idx + 1}. #{line.strip}"
+      end
+
+      $stderr.print "> "
+      input = $stdin.gets&.chomp
+      num = input.to_i
+
+      if num < 1 || num > bullet_lines.size
+        warn "❌ 無効な番号です。"
+        exit 1
+      end
+
+      _, target_idx = bullet_lines[num - 1]
+      deleted_line = current.delete_at(target_idx)
+
+      # 連続する空行を1行にまとめる
+      result = current.each_with_object([]) do |line, arr|
+        arr << line unless line.empty? && arr.last == ""
+      end
+
+      log_file.write(result.join("\n") + "\n")
+      warn "🗑️  削除しました: #{deleted_line.strip}"
+    end
+
     # --- review ---
 
     def cmd_review
@@ -327,7 +374,7 @@ module Worklog
 
       if RUBY_PLATFORM.include?("darwin")
         warn '  # macOS: 通知センター経由'
-        warn "  30 9,11,13,15,17,19,21 * * 1-5 osascript -e 'display notification \"あと30分で記録の時間です\" with title \"worklog\"'"
+        warn "  30 9,11,13,15,17,19,21 * * 1-5 osascript -e 'display notification \"あと30分で記録の時間です\" with title \"worklog\"' && afplay /System/Library/Sounds/Blow.aiff"
       else
         warn '  # Linux: notify-send 経由'
         warn '  30 9,11,13,15,17,19,21 * * 1-5 DISPLAY=:0 notify-send "worklog" "あと30分で記録の時間です"'
@@ -349,8 +396,9 @@ module Worklog
           worklog retro "振り返り"        本日の業務振り返りに追加
           worklog todo "やること"         明日のやることに追加
           worklog review                  今日のログをプレビュー
+          worklog delete                  項目を選択して削除
           worklog edit                    エディタで直接編集
-          worklog post                    内容をクリップボードにコピー
+          worklog copy                    内容をクリップボードにコピー
           worklog remind                  リマインド設定のヘルプ
           worklog help                    このヘルプを表示
 
@@ -362,11 +410,11 @@ module Worklog
           EDITOR                       エディタ (デフォルト: vim)
 
         使用例:
-          worklog add "MRNX: 開発: SolidQueueの停止処理"
+          worklog add "meiji: 開発: XXXXX"
           worklog note "Logの量確認"
           worklog note -d 2 "開発/STG: 拡張モニタリングOFF"
-          worklog retro "MRNX: QuickSightに関して要確認"
-          worklog todo "MRNX: QuickSuite調整 / IMEIチェック機能"
+          worklog retro "meiji: XXXX要確認"
+          worklog todo "meiji:  XXXXチェック機能"
           worklog review
           worklog post
       HELP
